@@ -7,9 +7,13 @@ authors = ["Iain H <iain@spiralpoint.org>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.89"
 async-trait = "0.1"
 bb8 = "0.8"
+circular_vec = "0.1.1"
 ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"]}
+testcontainers = { version = "0.23.1", features = ["blocking"] }
+testcontainers-modules = { version = "0.11.2", features = ["openldap"] }
 
 [dev-dependencies]
 tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }

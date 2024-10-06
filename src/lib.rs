@@ -53,3 +53,37 @@ impl bb8::ManageConnection for LdapConnectionManager {
         conn.is_closed()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bb8::ManageConnection;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::openldap::OpenLDAP;
+
+    #[tokio::test]
+    async fn connection_pool() -> anyhow::Result<()> {
+        let node = OpenLDAP::default()
+            .with_user("test_user", "test_password")
+            .start()
+            .await?;
+
+        let url = format!("ldap://127.0.0.1:{}", node.get_host_port_ipv4(1389).await?);
+        let conn_mgr = LdapConnectionManager::new(url);
+
+        let mut conn = conn_mgr.connect().await?;
+
+        let search_res = conn
+            .search(
+                "ou=users,dc=example,dc=org",
+                ldap3::Scope::Subtree,
+                "(cn=*)",
+                vec!["cn"],
+            )
+            .await;
+
+        assert_eq!(search_res.iter().len(), 1);
+
+        Ok(())
+    }
+}
