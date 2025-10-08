@@ -2,7 +2,7 @@ pub use bb8;
 pub use ldap3;
 
 use async_trait::async_trait;
-use ldap3::{LdapConnAsync, LdapConnSettings};
+use ldap3::{LdapConnAsync, LdapConnSettings, Scope};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -38,10 +38,9 @@ impl bb8::ManageConnection for LdapConnectionManager {
     }
 
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
-        // TODO: Making the assumption that connections have been bound, is this true?
-        let _res = conn
-            .with_timeout(Duration::from_secs(1))
-            .extended(ldap3::exop::WhoAmI)
+        // Touch the root DSE with a lightweight base-scope search that is allowed even for anonymous binds.
+        conn.with_timeout(Duration::from_secs(1))
+            .search("", Scope::Base, "(objectClass=*)", vec!["1.1"])
             .await?
             .success()?;
         Ok(())
