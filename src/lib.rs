@@ -57,15 +57,27 @@ impl bb8::ManageConnection for LdapConnectionManager {
 mod tests {
     use super::*;
     use bb8::ManageConnection;
-    use testcontainers::runners::AsyncRunner;
+    use testcontainers::{
+        core::{client::ClientError, error::TestcontainersError},
+        runners::AsyncRunner,
+    };
     use testcontainers_modules::openldap::OpenLDAP;
 
     #[tokio::test]
     async fn connection_pool() -> anyhow::Result<()> {
-        let node = OpenLDAP::default()
+        let node = match OpenLDAP::default()
             .with_user("test_user", "test_password")
             .start()
-            .await?;
+            .await
+        {
+            Ok(node) => node,
+            Err(err @ TestcontainersError::Client(ClientError::PullImage { .. }))
+            | Err(err @ TestcontainersError::Client(ClientError::Init(_))) => {
+                eprintln!("skipping connection_pool test: {err}");
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+        };
 
         let url = format!("ldap://127.0.0.1:{}", node.get_host_port_ipv4(1389).await?);
         let conn_mgr = LdapConnectionManager::new(url);
