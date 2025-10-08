@@ -63,6 +63,72 @@ mod tests {
     };
     use testcontainers_modules::openldap::OpenLDAP;
 
+    #[test]
+    fn new_sets_default_settings() {
+        let manager = LdapConnectionManager::new("ldap://example.com");
+        assert_eq!(manager.url, "ldap://example.com");
+        assert!(
+            !manager.settings.starttls(),
+            "starttls should be disabled by default"
+        );
+    }
+
+    #[test]
+    fn with_connection_settings_overrides_settings() {
+        let manager = LdapConnectionManager::new("ldap://example.com");
+        assert!(
+            !manager.settings.starttls(),
+            "control: default settings keep starttls disabled"
+        );
+
+        let updated_settings = LdapConnSettings::new().set_starttls(true);
+        let updated_manager = manager.clone().with_connection_settings(updated_settings);
+
+        assert_eq!(updated_manager.url, manager.url);
+        assert!(
+            updated_manager.settings.starttls(),
+            "starttls should be enabled after overriding settings"
+        );
+    }
+
+    #[test]
+    fn with_connection_settings_leaves_original_untouched() {
+        let manager = LdapConnectionManager::new("ldap://example.com");
+        let updated_manager = manager.clone().with_connection_settings(
+            LdapConnSettings::new().set_starttls(true),
+        );
+
+        assert!(
+            !manager.settings.starttls(),
+            "original manager should keep default settings"
+        );
+        assert!(
+            updated_manager.settings.starttls(),
+            "updated manager should reflect overrides"
+        );
+    }
+
+    #[test]
+    fn clone_preserves_custom_settings() {
+        let manager = LdapConnectionManager::new("ldap://example.com")
+            .with_connection_settings(LdapConnSettings::new().set_starttls(true));
+
+        let cloned = manager.clone();
+
+        assert_eq!(cloned.url, manager.url);
+        assert!(
+            cloned.settings.starttls(),
+            "clone should maintain customized settings"
+        );
+    }
+
+    #[test]
+    fn new_accepts_owned_strings() {
+        let url = "ldap://example.com".to_string();
+        let manager = LdapConnectionManager::new(url);
+        assert_eq!(manager.url, "ldap://example.com");
+    }
+
     #[tokio::test]
     async fn connection_pool() -> anyhow::Result<()> {
         let node = match OpenLDAP::default()
@@ -94,6 +160,17 @@ mod tests {
             .await;
 
         assert_eq!(search_res.iter().len(), 1);
+
+        assert!(
+            !conn_mgr.has_broken(&mut conn),
+            "freshly connected session should be healthy"
+        );
+
+        conn.unbind().await?;
+        assert!(
+            conn_mgr.has_broken(&mut conn),
+            "connection should be flagged as broken after unbind"
+        );
 
         Ok(())
     }
