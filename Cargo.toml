@@ -13,6 +13,6 @@ ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-aw
 
 [dev-dependencies]
 anyhow = "1.0.89"
-testcontainers = { version = "0.23.1", features = ["blocking"] }
-testcontainers-modules = { version = "0.11.2", features = ["openldap"] }
+testcontainers = { version = "0.25.0", features = ["blocking"] }
+testcontainers-modules = { version = "0.13.0", features = ["openldap"] }
 tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }
