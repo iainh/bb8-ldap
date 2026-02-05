@@ -10,6 +10,7 @@ pub use ldap3;
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope};
 use std::fmt;
 use std::time::Duration;
+use url::Url;
 
 /// A `bb8::ManageConnection` implementation for `ldap3` async connections.
 #[derive(Clone)]
@@ -32,6 +33,19 @@ impl LdapConnectionManager {
         LdapConnectionManager {
             url: ldap_url.into(),
             settings: LdapConnSettings::new(),
+        }
+    }
+
+    /// Create a new `LdapConnectionManager` after validating the URL.
+    pub fn new_from_stringlike<S: Into<String>>(ldap_url: S) -> Result<Self, ldap3::LdapError> {
+        let url = ldap_url.into();
+        let parsed = Url::parse(&url).map_err(ldap3::LdapError::from)?;
+
+        match parsed.scheme() {
+            "ldap" | "ldapi" => Ok(Self::new(url)),
+            _ => Err(ldap3::LdapError::UnknownScheme(
+                parsed.scheme().to_string(),
+            )),
         }
     }
 
@@ -143,6 +157,27 @@ mod tests {
         let url = "ldap://example.com".to_string();
         let manager = LdapConnectionManager::new(url);
         assert_eq!(manager.url, "ldap://example.com");
+    }
+
+    #[test]
+    fn new_from_stringlike_validates_urls() {
+        let manager = LdapConnectionManager::new_from_stringlike("ldap://example.com")
+            .expect("valid ldap URL should parse");
+        assert_eq!(manager.url, "ldap://example.com");
+
+        let err = LdapConnectionManager::new_from_stringlike("not a url")
+            .expect_err("invalid URLs should be rejected");
+        match err {
+            ldap3::LdapError::UrlParsing { .. } => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let err = LdapConnectionManager::new_from_stringlike("http://example.com")
+            .expect_err("unsupported schemes should be rejected");
+        match err {
+            ldap3::LdapError::UnknownScheme(_) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[tokio::test]

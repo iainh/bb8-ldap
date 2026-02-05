@@ -12,7 +12,7 @@ use ldap3::LdapConnSettings;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Configure the manager with the LDAP URL (StartTLS / LDAPS can be configured via LdapConnSettings).
-    let manager = LdapConnectionManager::new("ldap://localhost:1389")
+    let manager = LdapConnectionManager::new_from_stringlike("ldap://localhost:1389")?
         .with_connection_settings(
             LdapConnSettings::new()
                 .set_starttls(false) // customize as needed

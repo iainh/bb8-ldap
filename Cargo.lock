@@ -227,6 +227,7 @@ dependencies = [
  "testcontainers",
  "testcontainers-modules",
  "tokio",
+ "url",
 ]
 
 [[package]]

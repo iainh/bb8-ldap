@@ -9,6 +9,7 @@ authors = ["Iain H <iain@spiralpoint.org>"]
 [dependencies]
 bb8 = "0.9"
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-aws-lc-rs"]}
+url = "2"
 
 [dev-dependencies]
 anyhow = "1.0.89"
