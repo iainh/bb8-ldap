@@ -6,9 +6,15 @@ authors = ["Iain H <iain@spiralpoint.org>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["tls-rustls-aws-lc-rs"]
+tls-native = ["ldap3/tls-native"]
+tls-rustls-aws-lc-rs = ["ldap3/tls-rustls-aws-lc-rs"]
+tls-rustls-ring = ["ldap3/tls-rustls-ring"]
+
 [dependencies]
 bb8 = "0.9"
-ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-aws-lc-rs"]}
+ldap3 = { version = "0.12", default-features = false }
 url = "2"
 
 [dev-dependencies]

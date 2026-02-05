@@ -19,6 +19,7 @@ pub struct LdapConnectionManager {
     settings: LdapConnSettings,
     bind_dn: Option<String>,
     bind_password: Option<String>,
+    connect_timeout: Option<Duration>,
     validation_timeout: Duration,
     validation_base_dn: String,
     validation_filter: String,
@@ -42,6 +43,7 @@ impl LdapConnectionManager {
             settings: LdapConnSettings::new(),
             bind_dn: None,
             bind_password: None,
+            connect_timeout: None,
             validation_timeout: Duration::from_secs(1),
             validation_base_dn: String::new(),
             validation_filter: "(objectClass=*)".to_string(),
@@ -96,6 +98,12 @@ impl LdapConnectionManager {
         self.validation_attributes = attributes.into_iter().map(Into::into).collect();
         self
     }
+
+    /// Update the connection settings to include a connection timeout.
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
 }
 
 impl bb8::ManageConnection for LdapConnectionManager {
@@ -103,7 +111,11 @@ impl bb8::ManageConnection for LdapConnectionManager {
     type Error = ldap3::LdapError;
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        let (conn, ldap) = LdapConnAsync::with_settings(self.settings.clone(), &self.url).await?;
+        let settings = match self.connect_timeout {
+            Some(timeout) => self.settings.clone().set_conn_timeout(timeout),
+            None => self.settings.clone(),
+        };
+        let (conn, ldap) = LdapConnAsync::with_settings(settings, &self.url).await?;
 
         ldap3::drive!(conn);
         let mut ldap = ldap;
@@ -240,6 +252,14 @@ mod tests {
         assert_eq!(manager.validation_scope, Scope::Subtree);
         assert_eq!(manager.validation_filter, "(cn=alice)");
         assert_eq!(manager.validation_attributes, vec!["cn", "mail"]);
+    }
+
+    #[test]
+    fn with_connect_timeout_updates_settings() {
+        let manager = LdapConnectionManager::new("ldap://example.com")
+            .with_connect_timeout(Duration::from_secs(5));
+
+        assert_eq!(manager.connect_timeout, Some(Duration::from_secs(5)));
     }
 
     #[test]

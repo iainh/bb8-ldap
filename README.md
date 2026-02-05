@@ -18,6 +18,7 @@ async fn main() -> anyhow::Result<()> {
                 .set_starttls(false) // customize as needed
         )
         .with_bind_credentials("cn=admin,dc=example,dc=org", "admin")
+        .with_connect_timeout(std::time::Duration::from_secs(3))
         .with_validation_timeout(std::time::Duration::from_secs(2))
         .with_validation_search(
             "dc=example,dc=org",
@@ -45,6 +46,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+## Features
+
+- `tls-native`: Enable native TLS support in `ldap3` (use with `--no-default-features`).
+- `tls-rustls-aws-lc-rs` (default): Enable rustls + aws-lc-rs provider in `ldap3`.
+- `tls-rustls-ring`: Enable rustls + ring provider in `ldap3`.
 
 ## License
 
