@@ -20,7 +20,7 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let manager = LdapConnectionManager::new("ldap://localhost:1389")?
 //!         .with_connection_settings(LdapConnSettings::new().set_starttls(false))
-//!         .with_bind_credentials("cn=admin,dc=example,dc=org", "admin")
+//!         .with_bind_credentials("cn=admin,dc=example,dc=org", "adminpassword")
 //!         .with_connect_timeout(std::time::Duration::from_secs(3))
 //!         .with_validation_timeout(std::time::Duration::from_secs(2));
 //!
@@ -402,7 +402,7 @@ mod tests {
 
         let url = format!("ldap://127.0.0.1:{}", node.get_host_port_ipv4(1389).await?);
         let conn_mgr = LdapConnectionManager::new(url)?
-            .with_bind_credentials("cn=admin,dc=example,dc=org", "admin");
+            .with_bind_credentials("cn=admin,dc=example,dc=org", "adminpassword");
 
         let mut conn = conn_mgr.connect().await?;
 
