@@ -18,7 +18,13 @@ async fn main() -> anyhow::Result<()> {
                 .set_starttls(false) // customize as needed
         )
         .with_bind_credentials("cn=admin,dc=example,dc=org", "admin")
-        .with_validation_timeout(std::time::Duration::from_secs(2));
+        .with_validation_timeout(std::time::Duration::from_secs(2))
+        .with_validation_search(
+            "dc=example,dc=org",
+            ldap3::Scope::Subtree,
+            "(objectClass=*)",
+            vec!["cn", "mail"],
+        );
 
     // Build a pool with default settings.
     let pool = Pool::builder().max_size(15).build(manager).await?;

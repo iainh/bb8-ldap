@@ -20,6 +20,10 @@ pub struct LdapConnectionManager {
     bind_dn: Option<String>,
     bind_password: Option<String>,
     validation_timeout: Duration,
+    validation_base_dn: String,
+    validation_filter: String,
+    validation_scope: Scope,
+    validation_attributes: Vec<String>,
 }
 
 impl fmt::Debug for LdapConnectionManager {
@@ -39,6 +43,10 @@ impl LdapConnectionManager {
             bind_dn: None,
             bind_password: None,
             validation_timeout: Duration::from_secs(1),
+            validation_base_dn: String::new(),
+            validation_filter: "(objectClass=*)".to_string(),
+            validation_scope: Scope::Base,
+            validation_attributes: vec!["1.1".to_string()],
         }
     }
 
@@ -73,6 +81,21 @@ impl LdapConnectionManager {
         self.validation_timeout = timeout;
         self
     }
+
+    /// Override the validation search performed by `is_valid`.
+    pub fn with_validation_search<S: Into<String>>(
+        mut self,
+        base_dn: S,
+        scope: Scope,
+        filter: S,
+        attributes: Vec<S>,
+    ) -> Self {
+        self.validation_base_dn = base_dn.into();
+        self.validation_scope = scope;
+        self.validation_filter = filter.into();
+        self.validation_attributes = attributes.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 impl bb8::ManageConnection for LdapConnectionManager {
@@ -93,7 +116,12 @@ impl bb8::ManageConnection for LdapConnectionManager {
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
         // Touch the root DSE with a lightweight base-scope search that is allowed even for anonymous binds.
         conn.with_timeout(self.validation_timeout)
-            .search("", Scope::Base, "(objectClass=*)", vec!["1.1"])
+            .search(
+                &self.validation_base_dn,
+                self.validation_scope,
+                &self.validation_filter,
+                self.validation_attributes.clone(),
+            )
             .await?
             .success()?;
         Ok(())
@@ -197,6 +225,21 @@ mod tests {
             .with_validation_timeout(Duration::from_secs(10));
 
         assert_eq!(manager.validation_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn with_validation_search_updates_values() {
+        let manager = LdapConnectionManager::new("ldap://example.com").with_validation_search(
+            "dc=example,dc=org",
+            Scope::Subtree,
+            "(cn=alice)",
+            vec!["cn", "mail"],
+        );
+
+        assert_eq!(manager.validation_base_dn, "dc=example,dc=org");
+        assert_eq!(manager.validation_scope, Scope::Subtree);
+        assert_eq!(manager.validation_filter, "(cn=alice)");
+        assert_eq!(manager.validation_attributes, vec!["cn", "mail"]);
     }
 
     #[test]
