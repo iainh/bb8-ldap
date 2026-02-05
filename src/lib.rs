@@ -423,6 +423,8 @@ mod tests {
         );
 
         conn.unbind().await?;
+        // Give the background driver task time to process the unbind and close the channel
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(
             conn_mgr.has_broken(&mut conn),
             "connection should be flagged as broken after unbind"
