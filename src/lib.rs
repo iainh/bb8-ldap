@@ -1,13 +1,29 @@
+#![deny(missing_docs, missing_debug_implementations)]
+
+//! bb8 connection manager for LDAP connections provided by `ldap3`.
+
+/// Re-export the `bb8` crate for convenience.
 pub use bb8;
+/// Re-export the `ldap3` crate for convenience.
 pub use ldap3;
 
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope};
+use std::fmt;
 use std::time::Duration;
 
+/// A `bb8::ManageConnection` implementation for `ldap3` async connections.
 #[derive(Clone)]
 pub struct LdapConnectionManager {
     url: String,
     settings: LdapConnSettings,
+}
+
+impl fmt::Debug for LdapConnectionManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LdapConnectionManager")
+            .field("url", &self.url)
+            .finish()
+    }
 }
 
 impl LdapConnectionManager {
@@ -19,6 +35,7 @@ impl LdapConnectionManager {
         }
     }
 
+    /// Update the LDAP connection settings for this manager.
     pub fn with_connection_settings(mut self, settings: LdapConnSettings) -> Self {
         self.settings = settings;
         self
