@@ -1,6 +1,74 @@
 #![deny(missing_docs, missing_debug_implementations)]
 
-//! bb8 connection manager for LDAP connections provided by `ldap3`.
+//! A [`bb8`] connection manager for [`ldap3`] LDAP connections.
+//!
+//! This crate provides [`LdapConnectionManager`], which implements [`bb8::ManageConnection`]
+//! to pool and reuse asynchronous LDAP connections. The manager handles connection creation,
+//! optional bind credentials, and health-check validation via lightweight LDAP searches.
+//!
+//! Both `bb8` and `ldap3` are re-exported for convenience, so you can use them directly
+//! without adding separate dependencies.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use bb8::Pool;
+//! use bb8_ldap::LdapConnectionManager;
+//! use ldap3::LdapConnSettings;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let manager = LdapConnectionManager::new_from_stringlike("ldap://localhost:1389")?
+//!         .with_connection_settings(LdapConnSettings::new().set_starttls(false))
+//!         .with_bind_credentials("cn=admin,dc=example,dc=org", "admin")
+//!         .with_connect_timeout(std::time::Duration::from_secs(3))
+//!         .with_validation_timeout(std::time::Duration::from_secs(2));
+//!
+//!     let pool = Pool::builder().max_size(15).build(manager).await?;
+//!
+//!     let mut conn = pool.get().await?;
+//!     let (results, _res) = conn
+//!         .search("ou=users,dc=example,dc=org", ldap3::Scope::Subtree, "(cn=alice)", vec!["cn"])
+//!         .await?
+//!         .success()?;
+//!
+//!     println!("Found {} entries", results.len());
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Feature Flags
+//!
+//! | Feature | Description |
+//! |---------|-------------|
+//! | `tls-rustls-aws-lc-rs` | *(default)* Enable rustls with the aws-lc-rs crypto provider |
+//! | `tls-rustls-ring` | Enable rustls with the ring crypto provider |
+//! | `tls-native` | Enable native TLS support (use with `--no-default-features`) |
+//!
+//! Example using native TLS:
+//!
+//! ```toml
+//! [dependencies]
+//! bb8-ldap = { version = "*", default-features = false, features = ["tls-native"] }
+//! ```
+//!
+//! # Supported URL Schemes
+//!
+//! This crate supports the following URL schemes:
+//!
+//! - `ldap://` — Standard LDAP over TCP (optionally upgraded with StartTLS)
+//! - `ldapi://` — LDAP over Unix domain sockets
+//!
+//! Note: `ldaps://` (LDAP over implicit TLS) is **not** supported. To use TLS,
+//! connect via `ldap://` and enable StartTLS with [`LdapConnSettings::set_starttls(true)`](ldap3::LdapConnSettings::set_starttls).
+//!
+//! # Connection Lifecycle
+//!
+//! Each connection is established using [`ldap3::LdapConnAsync`], which returns a
+//! connection driver and an `Ldap` handle. The driver is spawned as a background
+//! task via [`ldap3::drive!()`](ldap3::drive), and the `Ldap` handle is what gets
+//! pooled and returned to callers. All LDAP operations go through this handle while
+//! the background task manages the underlying protocol I/O.
 
 /// Re-export the `bb8` crate for convenience.
 pub use bb8;
@@ -36,7 +104,10 @@ impl fmt::Debug for LdapConnectionManager {
 }
 
 impl LdapConnectionManager {
-    /// Create a new `LdapConnectionManager`.
+    /// Creates a new `LdapConnectionManager` with the given LDAP URL.
+    ///
+    /// The `ldap_url` is stored as-is without validation. Use [`new_from_stringlike`](Self::new_from_stringlike)
+    /// if you need URL validation.
     pub fn new<S: Into<String>>(ldap_url: S) -> Self {
         LdapConnectionManager {
             url: ldap_url.into(),
@@ -52,7 +123,18 @@ impl LdapConnectionManager {
         }
     }
 
-    /// Create a new `LdapConnectionManager` after validating the URL.
+    /// Creates a new `LdapConnectionManager` after validating the URL.
+    ///
+    /// The `ldap_url` is parsed and validated before creating the manager.
+    /// Valid schemes are `ldap` and `ldapi`.
+    ///
+    /// Note: `ldaps://` is not accepted. To use TLS, pass an `ldap://` URL and configure
+    /// StartTLS via [`LdapConnSettings::set_starttls(true)`](ldap3::LdapConnSettings::set_starttls).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LdapError::UrlParsing`](ldap3::LdapError::UrlParsing) if the URL is malformed.
+    /// Returns [`LdapError::UnknownScheme`](ldap3::LdapError::UnknownScheme) if the scheme is not `ldap` or `ldapi`.
     pub fn new_from_stringlike<S: Into<String>>(ldap_url: S) -> Result<Self, ldap3::LdapError> {
         let url = ldap_url.into();
         let parsed = Url::parse(&url).map_err(ldap3::LdapError::from)?;
@@ -71,20 +153,34 @@ impl LdapConnectionManager {
         self
     }
 
-    /// Configure a simple bind to be performed when new connections are created.
+    /// Configures a simple bind to be performed when new connections are created.
+    ///
+    /// The `bind_dn` is the distinguished name to bind as (e.g., `"cn=admin,dc=example,dc=org"`).
+    /// The `bind_password` is the password for the bind DN.
+    ///
+    /// The bind is performed immediately after each connection is established,
+    /// before the connection is returned from the pool.
     pub fn with_bind_credentials<S: Into<String>>(mut self, bind_dn: S, bind_password: S) -> Self {
         self.bind_dn = Some(bind_dn.into());
         self.bind_password = Some(bind_password.into());
         self
     }
 
-    /// Override the timeout used by `is_valid` health checks.
+    /// Overrides the timeout used by `is_valid` health checks.
+    ///
+    /// The `timeout` specifies the maximum duration to wait for the validation search.
+    /// The default is 1 second.
     pub fn with_validation_timeout(mut self, timeout: Duration) -> Self {
         self.validation_timeout = timeout;
         self
     }
 
-    /// Override the validation search performed by `is_valid`.
+    /// Overrides the validation search performed by `is_valid`.
+    ///
+    /// - `base_dn`: The base DN for the search. Default: `""` (root DSE).
+    /// - `scope`: The search scope. Default: [`Scope::Base`].
+    /// - `filter`: The search filter. Default: `"(objectClass=*)"`.
+    /// - `attributes`: The attributes to return. Default: `["1.1"]` (no attributes).
     pub fn with_validation_search<S: Into<String>>(
         mut self,
         base_dn: S,
@@ -99,13 +195,21 @@ impl LdapConnectionManager {
         self
     }
 
-    /// Update the connection settings to include a connection timeout.
+    /// Sets a timeout applied when establishing new connections.
+    ///
+    /// This timeout is applied during `connect()` on a clone of the configured
+    /// `LdapConnSettings`, and overrides any timeout previously set on those settings.
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(timeout);
         self
     }
 }
 
+/// Implements [`bb8::ManageConnection`] to provide connection pooling for `ldap3::Ldap` connections.
+///
+/// - `connect()` establishes a new LDAP connection and optionally performs a simple bind if credentials are configured.
+/// - `is_valid()` validates a connection by performing a lightweight LDAP search with the configured timeout.
+/// - `has_broken()` returns `true` if the underlying channel is closed (though this doesn't guarantee full bidirectional health).
 impl bb8::ManageConnection for LdapConnectionManager {
     type Connection = ldap3::Ldap;
     type Error = ldap3::LdapError;
@@ -126,7 +230,7 @@ impl bb8::ManageConnection for LdapConnectionManager {
     }
 
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
-        // Touch the root DSE with a lightweight base-scope search that is allowed even for anonymous binds.
+        // Touch the root DSE with a lightweight base-scope search that is commonly allowed even for anonymous binds.
         conn.with_timeout(self.validation_timeout)
             .search(
                 &self.validation_base_dn,
