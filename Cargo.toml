@@ -1,18 +1,17 @@
 [package]
 name = "bb8-ldap"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Iain H <iain@spiralpoint.org>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1"
-bb8 = "0.8"
+bb8 = "0.9"
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-aws-lc-rs"]}
 
 [dev-dependencies]
 anyhow = "1.0.89"
-testcontainers = { version = "0.25.0", features = ["blocking"] }
-testcontainers-modules = { version = "0.13.0", features = ["openldap"] }
-tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }
+testcontainers = { version = "0.26", features = ["blocking"] }
+testcontainers-modules = { version = "0.14", features = ["openldap"] }
+tokio = { version = "1.49", features = ["macros", "rt-multi-thread"] }

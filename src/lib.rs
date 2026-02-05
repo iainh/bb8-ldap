@@ -1,7 +1,6 @@
 pub use bb8;
 pub use ldap3;
 
-use async_trait::async_trait;
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope};
 use std::time::Duration;
 
@@ -25,7 +24,7 @@ impl LdapConnectionManager {
         self
     }
 }
-#[async_trait]
+
 impl bb8::ManageConnection for LdapConnectionManager {
     type Connection = ldap3::Ldap;
     type Error = ldap3::LdapError;
