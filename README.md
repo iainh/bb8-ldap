@@ -17,7 +17,8 @@ async fn main() -> anyhow::Result<()> {
             LdapConnSettings::new()
                 .set_starttls(false) // customize as needed
         )
-        .with_bind_credentials("cn=admin,dc=example,dc=org", "admin");
+        .with_bind_credentials("cn=admin,dc=example,dc=org", "admin")
+        .with_validation_timeout(std::time::Duration::from_secs(2));
 
     // Build a pool with default settings.
     let pool = Pool::builder().max_size(15).build(manager).await?;

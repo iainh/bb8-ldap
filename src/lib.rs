@@ -19,6 +19,7 @@ pub struct LdapConnectionManager {
     settings: LdapConnSettings,
     bind_dn: Option<String>,
     bind_password: Option<String>,
+    validation_timeout: Duration,
 }
 
 impl fmt::Debug for LdapConnectionManager {
@@ -37,6 +38,7 @@ impl LdapConnectionManager {
             settings: LdapConnSettings::new(),
             bind_dn: None,
             bind_password: None,
+            validation_timeout: Duration::from_secs(1),
         }
     }
 
@@ -65,6 +67,12 @@ impl LdapConnectionManager {
         self.bind_password = Some(bind_password.into());
         self
     }
+
+    /// Override the timeout used by `is_valid` health checks.
+    pub fn with_validation_timeout(mut self, timeout: Duration) -> Self {
+        self.validation_timeout = timeout;
+        self
+    }
 }
 
 impl bb8::ManageConnection for LdapConnectionManager {
@@ -84,7 +92,7 @@ impl bb8::ManageConnection for LdapConnectionManager {
 
     async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
         // Touch the root DSE with a lightweight base-scope search that is allowed even for anonymous binds.
-        conn.with_timeout(Duration::from_secs(1))
+        conn.with_timeout(self.validation_timeout)
             .search("", Scope::Base, "(objectClass=*)", vec!["1.1"])
             .await?
             .success()?;
@@ -181,6 +189,14 @@ mod tests {
 
         assert_eq!(manager.bind_dn.as_deref(), Some("cn=admin"));
         assert_eq!(manager.bind_password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn with_validation_timeout_updates_value() {
+        let manager = LdapConnectionManager::new("ldap://example.com")
+            .with_validation_timeout(Duration::from_secs(10));
+
+        assert_eq!(manager.validation_timeout, Duration::from_secs(10));
     }
 
     #[test]
