@@ -16,7 +16,8 @@ async fn main() -> anyhow::Result<()> {
         .with_connection_settings(
             LdapConnSettings::new()
                 .set_starttls(false) // customize as needed
-        );
+        )
+        .with_bind_credentials("cn=admin,dc=example,dc=org", "admin");
 
     // Build a pool with default settings.
     let pool = Pool::builder().max_size(15).build(manager).await?;

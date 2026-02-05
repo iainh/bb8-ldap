@@ -17,6 +17,8 @@ use url::Url;
 pub struct LdapConnectionManager {
     url: String,
     settings: LdapConnSettings,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
 }
 
 impl fmt::Debug for LdapConnectionManager {
@@ -33,6 +35,8 @@ impl LdapConnectionManager {
         LdapConnectionManager {
             url: ldap_url.into(),
             settings: LdapConnSettings::new(),
+            bind_dn: None,
+            bind_password: None,
         }
     }
 
@@ -54,6 +58,13 @@ impl LdapConnectionManager {
         self.settings = settings;
         self
     }
+
+    /// Configure a simple bind to be performed when new connections are created.
+    pub fn with_bind_credentials<S: Into<String>>(mut self, bind_dn: S, bind_password: S) -> Self {
+        self.bind_dn = Some(bind_dn.into());
+        self.bind_password = Some(bind_password.into());
+        self
+    }
 }
 
 impl bb8::ManageConnection for LdapConnectionManager {
@@ -64,6 +75,10 @@ impl bb8::ManageConnection for LdapConnectionManager {
         let (conn, ldap) = LdapConnAsync::with_settings(self.settings.clone(), &self.url).await?;
 
         ldap3::drive!(conn);
+        let mut ldap = ldap;
+        if let (Some(bind_dn), Some(bind_password)) = (&self.bind_dn, &self.bind_password) {
+            ldap.simple_bind(bind_dn, bind_password).await?.success()?;
+        }
         Ok(ldap)
     }
 
@@ -160,6 +175,15 @@ mod tests {
     }
 
     #[test]
+    fn with_bind_credentials_sets_values() {
+        let manager = LdapConnectionManager::new("ldap://example.com")
+            .with_bind_credentials("cn=admin", "secret");
+
+        assert_eq!(manager.bind_dn.as_deref(), Some("cn=admin"));
+        assert_eq!(manager.bind_password.as_deref(), Some("secret"));
+    }
+
+    #[test]
     fn new_from_stringlike_validates_urls() {
         let manager = LdapConnectionManager::new_from_stringlike("ldap://example.com")
             .expect("valid ldap URL should parse");
@@ -197,7 +221,8 @@ mod tests {
         };
 
         let url = format!("ldap://127.0.0.1:{}", node.get_host_port_ipv4(1389).await?);
-        let conn_mgr = LdapConnectionManager::new(url);
+        let conn_mgr = LdapConnectionManager::new(url)
+            .with_bind_credentials("cn=admin,dc=example,dc=org", "admin");
 
         let mut conn = conn_mgr.connect().await?;
 
