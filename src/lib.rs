@@ -18,7 +18,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let manager = LdapConnectionManager::new_from_stringlike("ldap://localhost:1389")?
+//!     let manager = LdapConnectionManager::new("ldap://localhost:1389")?
 //!         .with_connection_settings(LdapConnSettings::new().set_starttls(false))
 //!         .with_bind_credentials("cn=admin,dc=example,dc=org", "admin")
 //!         .with_connect_timeout(std::time::Duration::from_secs(3))
@@ -106,27 +106,7 @@ impl fmt::Debug for LdapConnectionManager {
 impl LdapConnectionManager {
     /// Creates a new `LdapConnectionManager` with the given LDAP URL.
     ///
-    /// The `ldap_url` is stored as-is without validation. Use [`new_from_stringlike`](Self::new_from_stringlike)
-    /// if you need URL validation.
-    pub fn new<S: Into<String>>(ldap_url: S) -> Self {
-        LdapConnectionManager {
-            url: ldap_url.into(),
-            settings: LdapConnSettings::new(),
-            bind_dn: None,
-            bind_password: None,
-            connect_timeout: None,
-            validation_timeout: Duration::from_secs(1),
-            validation_base_dn: String::new(),
-            validation_filter: "(objectClass=*)".to_string(),
-            validation_scope: Scope::Base,
-            validation_attributes: vec!["1.1".to_string()],
-        }
-    }
-
-    /// Creates a new `LdapConnectionManager` after validating the URL.
-    ///
-    /// The `ldap_url` is parsed and validated before creating the manager.
-    /// Valid schemes are `ldap` and `ldapi`.
+    /// The URL is parsed and validated. Valid schemes are `ldap` and `ldapi`.
     ///
     /// Note: `ldaps://` is not accepted. To use TLS, pass an `ldap://` URL and configure
     /// StartTLS via [`LdapConnSettings::set_starttls(true)`](ldap3::LdapConnSettings::set_starttls).
@@ -135,12 +115,23 @@ impl LdapConnectionManager {
     ///
     /// Returns [`LdapError::UrlParsing`](ldap3::LdapError::UrlParsing) if the URL is malformed.
     /// Returns [`LdapError::UnknownScheme`](ldap3::LdapError::UnknownScheme) if the scheme is not `ldap` or `ldapi`.
-    pub fn new_from_stringlike<S: Into<String>>(ldap_url: S) -> Result<Self, ldap3::LdapError> {
+    pub fn new<S: Into<String>>(ldap_url: S) -> Result<Self, ldap3::LdapError> {
         let url = ldap_url.into();
         let parsed = Url::parse(&url).map_err(ldap3::LdapError::from)?;
 
         match parsed.scheme() {
-            "ldap" | "ldapi" => Ok(Self::new(url)),
+            "ldap" | "ldapi" => Ok(LdapConnectionManager {
+                url,
+                settings: LdapConnSettings::new(),
+                bind_dn: None,
+                bind_password: None,
+                connect_timeout: None,
+                validation_timeout: Duration::from_secs(1),
+                validation_base_dn: String::new(),
+                validation_filter: "(objectClass=*)".to_string(),
+                validation_scope: Scope::Base,
+                validation_attributes: vec!["1.1".to_string()],
+            }),
             _ => Err(ldap3::LdapError::UnknownScheme(
                 parsed.scheme().to_string(),
             )),
@@ -262,7 +253,7 @@ mod tests {
 
     #[test]
     fn new_sets_default_settings() {
-        let manager = LdapConnectionManager::new("ldap://example.com");
+        let manager = LdapConnectionManager::new("ldap://example.com").unwrap();
         assert_eq!(manager.url, "ldap://example.com");
         assert!(
             !manager.settings.starttls(),
@@ -272,7 +263,7 @@ mod tests {
 
     #[test]
     fn with_connection_settings_overrides_settings() {
-        let manager = LdapConnectionManager::new("ldap://example.com");
+        let manager = LdapConnectionManager::new("ldap://example.com").unwrap();
         assert!(
             !manager.settings.starttls(),
             "control: default settings keep starttls disabled"
@@ -290,10 +281,10 @@ mod tests {
 
     #[test]
     fn with_connection_settings_leaves_original_untouched() {
-        let manager = LdapConnectionManager::new("ldap://example.com");
-        let updated_manager = manager.clone().with_connection_settings(
-            LdapConnSettings::new().set_starttls(true),
-        );
+        let manager = LdapConnectionManager::new("ldap://example.com").unwrap();
+        let updated_manager = manager
+            .clone()
+            .with_connection_settings(LdapConnSettings::new().set_starttls(true));
 
         assert!(
             !manager.settings.starttls(),
@@ -308,6 +299,7 @@ mod tests {
     #[test]
     fn clone_preserves_custom_settings() {
         let manager = LdapConnectionManager::new("ldap://example.com")
+            .unwrap()
             .with_connection_settings(LdapConnSettings::new().set_starttls(true));
 
         let cloned = manager.clone();
@@ -322,13 +314,14 @@ mod tests {
     #[test]
     fn new_accepts_owned_strings() {
         let url = "ldap://example.com".to_string();
-        let manager = LdapConnectionManager::new(url);
+        let manager = LdapConnectionManager::new(url).unwrap();
         assert_eq!(manager.url, "ldap://example.com");
     }
 
     #[test]
     fn with_bind_credentials_sets_values() {
         let manager = LdapConnectionManager::new("ldap://example.com")
+            .unwrap()
             .with_bind_credentials("cn=admin", "secret");
 
         assert_eq!(manager.bind_dn.as_deref(), Some("cn=admin"));
@@ -338,6 +331,7 @@ mod tests {
     #[test]
     fn with_validation_timeout_updates_value() {
         let manager = LdapConnectionManager::new("ldap://example.com")
+            .unwrap()
             .with_validation_timeout(Duration::from_secs(10));
 
         assert_eq!(manager.validation_timeout, Duration::from_secs(10));
@@ -345,12 +339,14 @@ mod tests {
 
     #[test]
     fn with_validation_search_updates_values() {
-        let manager = LdapConnectionManager::new("ldap://example.com").with_validation_search(
-            "dc=example,dc=org",
-            Scope::Subtree,
-            "(cn=alice)",
-            vec!["cn", "mail"],
-        );
+        let manager = LdapConnectionManager::new("ldap://example.com")
+            .unwrap()
+            .with_validation_search(
+                "dc=example,dc=org",
+                Scope::Subtree,
+                "(cn=alice)",
+                vec!["cn", "mail"],
+            );
 
         assert_eq!(manager.validation_base_dn, "dc=example,dc=org");
         assert_eq!(manager.validation_scope, Scope::Subtree);
@@ -361,25 +357,26 @@ mod tests {
     #[test]
     fn with_connect_timeout_updates_settings() {
         let manager = LdapConnectionManager::new("ldap://example.com")
+            .unwrap()
             .with_connect_timeout(Duration::from_secs(5));
 
         assert_eq!(manager.connect_timeout, Some(Duration::from_secs(5)));
     }
 
     #[test]
-    fn new_from_stringlike_validates_urls() {
-        let manager = LdapConnectionManager::new_from_stringlike("ldap://example.com")
-            .expect("valid ldap URL should parse");
+    fn new_validates_urls() {
+        let manager =
+            LdapConnectionManager::new("ldap://example.com").expect("valid ldap URL should parse");
         assert_eq!(manager.url, "ldap://example.com");
 
-        let err = LdapConnectionManager::new_from_stringlike("not a url")
-            .expect_err("invalid URLs should be rejected");
+        let err =
+            LdapConnectionManager::new("not a url").expect_err("invalid URLs should be rejected");
         match err {
             ldap3::LdapError::UrlParsing { .. } => {}
             other => panic!("unexpected error: {other:?}"),
         }
 
-        let err = LdapConnectionManager::new_from_stringlike("http://example.com")
+        let err = LdapConnectionManager::new("http://example.com")
             .expect_err("unsupported schemes should be rejected");
         match err {
             ldap3::LdapError::UnknownScheme(_) => {}
@@ -404,7 +401,7 @@ mod tests {
         };
 
         let url = format!("ldap://127.0.0.1:{}", node.get_host_port_ipv4(1389).await?);
-        let conn_mgr = LdapConnectionManager::new(url)
+        let conn_mgr = LdapConnectionManager::new(url)?
             .with_bind_credentials("cn=admin,dc=example,dc=org", "admin");
 
         let mut conn = conn_mgr.connect().await?;
