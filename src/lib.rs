@@ -57,10 +57,11 @@
 //! This crate supports the following URL schemes:
 //!
 //! - `ldap://` — Standard LDAP over TCP (optionally upgraded with StartTLS)
+//! - `ldaps://` — LDAP over implicit TLS (requires a TLS feature)
 //! - `ldapi://` — LDAP over Unix domain sockets
 //!
-//! Note: `ldaps://` (LDAP over implicit TLS) is **not** supported. To use TLS,
-//! connect via `ldap://` and enable StartTLS with [`LdapConnSettings::set_starttls(true)`](ldap3::LdapConnSettings::set_starttls).
+//! Pooled handles, including their clones, must never be rebound as users: clones
+//! share the same session. Verify user credentials on separate, unpooled connections.
 //!
 //! # Connection Lifecycle
 //!
@@ -77,17 +78,23 @@ pub use ldap3;
 
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope};
 use std::fmt;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use url::Url;
 
 /// A `bb8::ManageConnection` implementation for `ldap3` async connections.
 #[derive(Clone)]
 pub struct LdapConnectionManager {
-    url: String,
+    urls: Vec<String>,
+    next_endpoint: Arc<AtomicUsize>,
     settings: LdapConnSettings,
     bind_dn: Option<String>,
     bind_password: Option<String>,
     connect_timeout: Option<Duration>,
+    bind_timeout: Option<Duration>,
     validation_timeout: Duration,
     validation_base_dn: String,
     validation_filter: String,
@@ -98,7 +105,7 @@ pub struct LdapConnectionManager {
 impl fmt::Debug for LdapConnectionManager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LdapConnectionManager")
-            .field("url", &self.url)
+            .field("endpoint_count", &self.urls.len())
             .finish()
     }
 }
@@ -106,36 +113,73 @@ impl fmt::Debug for LdapConnectionManager {
 impl LdapConnectionManager {
     /// Creates a new `LdapConnectionManager` with the given LDAP URL.
     ///
-    /// The URL is parsed and validated. Valid schemes are `ldap` and `ldapi`.
-    ///
-    /// Note: `ldaps://` is not accepted. To use TLS, pass an `ldap://` URL and configure
-    /// StartTLS via [`LdapConnSettings::set_starttls(true)`](ldap3::LdapConnSettings::set_starttls).
+    /// The URL is parsed and validated. Valid schemes are `ldap`, `ldaps` and `ldapi`.
     ///
     /// # Errors
     ///
     /// Returns [`LdapError::UrlParsing`](ldap3::LdapError::UrlParsing) if the URL is malformed.
-    /// Returns [`LdapError::UnknownScheme`](ldap3::LdapError::UnknownScheme) if the scheme is not `ldap` or `ldapi`.
+    /// Returns [`LdapError::UnknownScheme`](ldap3::LdapError::UnknownScheme) for other schemes.
     pub fn new<S: Into<String>>(ldap_url: S) -> Result<Self, ldap3::LdapError> {
-        let url = ldap_url.into();
-        let parsed = Url::parse(&url).map_err(ldap3::LdapError::from)?;
+        Self::new_with_urls([ldap_url])
+    }
 
-        match parsed.scheme() {
-            "ldap" | "ldapi" => Ok(LdapConnectionManager {
-                url,
-                settings: LdapConnSettings::new(),
-                bind_dn: None,
-                bind_password: None,
-                connect_timeout: None,
-                validation_timeout: Duration::from_secs(1),
-                validation_base_dn: String::new(),
-                validation_filter: "(objectClass=*)".to_string(),
-                validation_scope: Scope::Base,
-                validation_attributes: vec!["1.1".to_string()],
-            }),
-            _ => Err(ldap3::LdapError::UnknownScheme(
-                parsed.scheme().to_string(),
-            )),
+    /// Creates a manager with a nonempty list of LDAP endpoints.
+    ///
+    /// Each connection attempt rotates its first endpoint (shared across manager
+    /// clones), then tries each endpoint once in order on establishment failures.
+    /// TLS and StartTLS establishment errors can trigger failover. Bind failures,
+    /// including timeouts and invalid credentials, and subsequent operations never
+    /// trigger failover. Settings and service credentials apply to every endpoint.
+    /// With no connection timeout configured, an unreachable endpoint may stall.
+    ///
+    /// ```
+    /// use bb8_ldap::LdapConnectionManager;
+    /// use std::time::Duration;
+    /// let manager = LdapConnectionManager::new_with_urls([
+    ///     "ldaps://ldap-a.example.org", "ldaps://ldap-b.example.org",
+    /// ])?
+    ///     .with_connect_timeout(Duration::from_secs(3))
+    ///     .with_bind_timeout(Duration::from_secs(2));
+    /// # Ok::<(), bb8_ldap::ldap3::LdapError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an I/O error with `InvalidInput` for an empty list, URL parsing or
+    /// unknown-scheme errors for invalid endpoints. If all endpoints fail to connect,
+    /// `connect` returns the last establishment error.
+    pub fn new_with_urls<I, S>(ldap_urls: I) -> Result<Self, ldap3::LdapError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let urls: Vec<String> = ldap_urls.into_iter().map(Into::into).collect();
+        if urls.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "LDAP endpoints must not be empty",
+            )
+            .into());
         }
+        for url in &urls {
+            let parsed = Url::parse(url)?;
+            if !matches!(parsed.scheme(), "ldap" | "ldaps" | "ldapi") {
+                return Err(ldap3::LdapError::UnknownScheme(parsed.scheme().to_string()));
+            }
+        }
+        Ok(LdapConnectionManager {
+            urls,
+            next_endpoint: Arc::new(AtomicUsize::new(0)),
+            settings: LdapConnSettings::new(),
+            bind_dn: None,
+            bind_password: None,
+            connect_timeout: None,
+            bind_timeout: None,
+            validation_timeout: Duration::from_secs(1),
+            validation_base_dn: String::new(),
+            validation_filter: "(objectClass=*)".to_string(),
+            validation_scope: Scope::Base,
+            validation_attributes: vec!["1.1".to_string()],
+        })
     }
 
     /// Update the LDAP connection settings for this manager.
@@ -194,6 +238,14 @@ impl LdapConnectionManager {
         self.connect_timeout = Some(timeout);
         self
     }
+
+    /// Bounds the optional service-account simple bind independently of connection
+    /// establishment. By default no bind timeout is applied. Bind errors are never
+    /// retried on another endpoint; this does not set timeouts for caller operations.
+    pub fn with_bind_timeout(mut self, timeout: Duration) -> Self {
+        self.bind_timeout = Some(timeout);
+        self
+    }
 }
 
 /// Implements [`bb8::ManageConnection`] to provide connection pooling for `ldap3::Ldap` connections.
@@ -210,11 +262,34 @@ impl bb8::ManageConnection for LdapConnectionManager {
             Some(timeout) => self.settings.clone().set_conn_timeout(timeout),
             None => self.settings.clone(),
         };
-        let (conn, ldap) = LdapConnAsync::with_settings(settings, &self.url).await?;
+        let first = self.next_endpoint.fetch_add(1, Ordering::Relaxed) % self.urls.len();
+        let mut last_error = None;
+        let mut connection = None;
+        for offset in 0..self.urls.len() {
+            match LdapConnAsync::with_settings(
+                settings.clone(),
+                &self.urls[(first + offset) % self.urls.len()],
+            )
+            .await
+            {
+                Ok(pair) => {
+                    connection = Some(pair);
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        let (conn, ldap) = match connection {
+            Some(pair) => pair,
+            None => return Err(last_error.expect("nonempty endpoint list")),
+        };
 
         ldap3::drive!(conn);
         let mut ldap = ldap;
         if let (Some(bind_dn), Some(bind_password)) = (&self.bind_dn, &self.bind_password) {
+            if let Some(timeout) = self.bind_timeout {
+                ldap.with_timeout(timeout);
+            }
             ldap.simple_bind(bind_dn, bind_password).await?.success()?;
         }
         Ok(ldap)
@@ -254,7 +329,7 @@ mod tests {
     #[test]
     fn new_sets_default_settings() {
         let manager = LdapConnectionManager::new("ldap://example.com").unwrap();
-        assert_eq!(manager.url, "ldap://example.com");
+        assert_eq!(manager.urls, ["ldap://example.com"]);
         assert!(
             !manager.settings.starttls(),
             "starttls should be disabled by default"
@@ -272,7 +347,7 @@ mod tests {
         let updated_settings = LdapConnSettings::new().set_starttls(true);
         let updated_manager = manager.clone().with_connection_settings(updated_settings);
 
-        assert_eq!(updated_manager.url, manager.url);
+        assert_eq!(updated_manager.urls, manager.urls);
         assert!(
             updated_manager.settings.starttls(),
             "starttls should be enabled after overriding settings"
@@ -304,7 +379,7 @@ mod tests {
 
         let cloned = manager.clone();
 
-        assert_eq!(cloned.url, manager.url);
+        assert_eq!(cloned.urls, manager.urls);
         assert!(
             cloned.settings.starttls(),
             "clone should maintain customized settings"
@@ -315,7 +390,7 @@ mod tests {
     fn new_accepts_owned_strings() {
         let url = "ldap://example.com".to_string();
         let manager = LdapConnectionManager::new(url).unwrap();
-        assert_eq!(manager.url, "ldap://example.com");
+        assert_eq!(manager.urls, ["ldap://example.com"]);
     }
 
     #[test]
@@ -367,7 +442,7 @@ mod tests {
     fn new_validates_urls() {
         let manager =
             LdapConnectionManager::new("ldap://example.com").expect("valid ldap URL should parse");
-        assert_eq!(manager.url, "ldap://example.com");
+        assert_eq!(manager.urls, ["ldap://example.com"]);
 
         let err =
             LdapConnectionManager::new("not a url").expect_err("invalid URLs should be rejected");
