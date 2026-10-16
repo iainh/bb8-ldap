@@ -461,36 +461,47 @@ mod tests {
 
     #[tokio::test]
     async fn connection_pool() -> anyhow::Result<()> {
-        let node = match OpenLDAP::default()
-            .with_user("test_user", "test_password")
-            .start()
-            .await
-        {
-            Ok(node) => node,
-            Err(err @ TestcontainersError::Client(ClientError::PullImage { .. }))
-            | Err(err @ TestcontainersError::Client(ClientError::Init(_))) => {
-                eprintln!("skipping connection_pool test: {err}");
-                return Ok(());
+        // Keep the container alive until the test finishes when no external server is supplied.
+        let (url, _node) = match std::env::var("LDAP_TEST_URL") {
+            Ok(url) => (url, None),
+            Err(std::env::VarError::NotPresent) => {
+                let node = match OpenLDAP::default()
+                    .with_user("test_user", "test_password")
+                    .start()
+                    .await
+                {
+                    Ok(node) => node,
+                    Err(err @ TestcontainersError::Client(ClientError::PullImage { .. }))
+                    | Err(err @ TestcontainersError::Client(ClientError::Init(_))) => {
+                        eprintln!("skipping connection_pool test: {err}");
+                        return Ok(());
+                    }
+                    Err(err) => return Err(err.into()),
+                };
+                let url = format!("ldap://127.0.0.1:{}", node.get_host_port_ipv4(1389).await?);
+                (url, Some(node))
             }
             Err(err) => return Err(err.into()),
         };
 
-        let url = format!("ldap://127.0.0.1:{}", node.get_host_port_ipv4(1389).await?);
         let conn_mgr = LdapConnectionManager::new(url)?
             .with_bind_credentials("cn=admin,dc=example,dc=org", "adminpassword");
 
         let mut conn = conn_mgr.connect().await?;
 
-        let search_res = conn
+        let (entries, _) = conn
             .search(
                 "ou=users,dc=example,dc=org",
                 ldap3::Scope::Subtree,
                 "(cn=*)",
                 vec!["cn"],
             )
-            .await;
+            .await?
+            .success()?;
 
-        assert_eq!(search_res.iter().len(), 1);
+        assert_eq!(entries.len(), 1);
+        let entry = ldap3::SearchEntry::construct(entries.into_iter().next().unwrap());
+        assert_eq!(entry.attrs.get("cn"), Some(&vec!["test_user".to_owned()]));
 
         assert!(
             !conn_mgr.has_broken(&mut conn),

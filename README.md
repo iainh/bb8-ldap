@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-## Multiple endpoints and authentication safety
+## Multiple Endpoints and Authentication Safety
 
 ```rust
 use bb8_ldap::{ldap3::LdapConnSettings, LdapConnectionManager};
@@ -88,6 +88,63 @@ The manager does not enforce this restriction on the re-exported LDAP handles.
 - `tls-native`: Enable native TLS support in `ldap3` (use with `--no-default-features`).
 - `tls-rustls-aws-lc-rs` (default): Enable rustls + aws-lc-rs provider in `ldap3`.
 - `tls-rustls-ring`: Enable rustls + ring provider in `ldap3`.
+
+## Development
+
+Install [Nix and devenv](https://devenv.sh/getting-started/), then enter the
+development environment:
+
+```sh
+devenv shell
+```
+
+The environment provides Rust, Cargo, Clippy, rustfmt, rust-analyzer and the native
+build dependencies for all three TLS features. If you use direnv, run
+`direnv allow` to load it automatically through `.envrc`.
+
+```sh
+cargo build
+cargo test
+cargo test --no-default-features --features tls-native
+cargo test --no-default-features --features tls-rustls-ring
+```
+
+To run the suite against a local OpenLDAP server without Docker, use:
+
+```sh
+devenv test
+```
+
+This starts OpenLDAP on IPv4 loopback using a free port starting at 1389, waits
+for it to be ready, runs the tests with all three TLS feature configurations and
+stops the server afterwards. The chosen URL is passed to the tests automatically.
+The server uses plain LDAP; these runs check the feature builds, not TLS negotiation.
+
+For an interactive server, run `devenv up` in a separate terminal, then run tests
+inside `devenv shell` with:
+
+```sh
+LDAP_TEST_URL="$(cat "$DEVENV_STATE/openldap/url")" cargo test
+```
+
+Stop the foreground server with Ctrl+C. Its data persists under
+`$DEVENV_STATE/openldap` (normally `.devenv/state/openldap`). To reset the test
+directory, stop the server and remove that directory before starting it again.
+The seeded directory contains `cn=test_user,ou=users,dc=example,dc=org` with password
+`test_password`. The admin bind DN is `cn=admin,dc=example,dc=org` with password
+`adminpassword`. These are public, development-only credentials; the server listens
+only on IPv4 loopback.
+
+`LDAP_TEST_URL` can also point to another test server with the same credentials and
+directory contents. Connection or LDAP failures from an explicitly supplied server
+fail the test rather than skipping it. When the variable is unset, the test retains
+its Testcontainers fallback, which requires a running Docker-compatible daemon;
+it skips if the Docker client cannot initialize or the image cannot be pulled.
+
+Update the pinned development dependencies with `devenv update` and commit the
+resulting `devenv.lock`. The flake still provides package builds and checks through
+`nix build` and `nix flake check`; use devenv rather than `nix develop` for the
+development shell.
 
 ## License
 

@@ -1,4 +1,6 @@
 /target
 result*
 .direnv/
-Cargo.lock
+.devenv*
+devenv.local.nix
+devenv.local.yaml
